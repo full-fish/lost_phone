@@ -26,22 +26,25 @@ def release_wake_lock():
 
 
 # =========================================================
-# 🛠️ 안전한 명령어 실행 함수 (Killer 기능 포함)
+# 🛠️ 안전한 명령어 실행 함수 (OS timeout 명령어 사용)
 # =========================================================
 def run_command_with_timeout(cmd_list, timeout_sec):
     try:
-        # 🚨 수정: OS 레벨의 'timeout' 명령어를 앞에 붙여서 이중으로 제한합니다.
-        # 파이썬 timeout보다 1초 작게 설정하여 OS가 먼저 죽이게 합니다.
-        os_timeout = str(max(1, timeout_sec - 1))
-        final_cmd = ["timeout", os_timeout] + cmd_list
+        # 🚨 수정: 파이썬 timeout보다 OS 명령어로 강제 종료시키는 게 더 확실합니다.
+        # coreutils의 timeout 명령어를 사용합니다.
+        # 예: timeout 5 termux-location ...
+
+        # cmd_list 앞에 ["timeout", "초"]를 붙입니다.
+        full_cmd = ["timeout", str(timeout_sec)] + cmd_list
 
         proc = subprocess.Popen(
-            final_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            full_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
 
-        # 파이썬에서도 기다려줍니다.
-        stdout, stderr = proc.communicate(timeout=timeout_sec)
+        # 파이썬에서도 기다려줍니다 (약간의 여유 1초 추가)
+        stdout, stderr = proc.communicate(timeout=timeout_sec + 1)
 
+        # timeout 명령어가 프로세스를 죽이면 returncode는 124가 됩니다.
         if proc.returncode == 0:
             return stdout, True
         else:
@@ -72,15 +75,15 @@ def format_location_info(loc_json):
 
 
 # =========================================================
-# 🛰️ 위치 정보 획득 함수 (이중 타임아웃 적용)
+# 🛰️ 위치 정보 획득 함수 (현실적인 시간: 5초/10초)
 # =========================================================
 def get_best_location():
     print("🛰️ 위치 정보 탐색 시작...")
 
     # 1단계: GPS (High Accuracy) 시도
-    # 🚨 3초로 설정 -> 내부적으로 'timeout 2' 명령어가 실행됨
-    print("  [1단계] GPS 정밀 탐색 시도 (3초)...")
-    gps_output, success = run_command_with_timeout(["termux-location", "-p", "gps"], 3)
+    # 🚨 수정: 1초는 너무 짧아 5초로 변경 (하드웨어 Wakeup 시간 고려)
+    print("  [1단계] GPS 정밀 탐색 시도 (5초)...")
+    gps_output, success = run_command_with_timeout(["termux-location", "-p", "gps"], 5)
 
     if success and gps_output:
         try:
@@ -93,10 +96,10 @@ def get_best_location():
     print("  ⚠️ GPS 탐색 실패. (빠르게 네트워크로 전환)")
 
     # 2단계: Network (Wi-Fi/Cell) 시도
-    # 🚨 5초로 설정 -> 내부적으로 'timeout 4' 명령어가 실행됨
-    print("  [2단계] 네트워크 기반 탐색 시도 (5초)...")
+    # 🚨 수정: 3초는 불안정하여 10초로 변경 (네트워크 스캔 시간 고려)
+    print("  [2단계] 네트워크 기반 탐색 시도 (10초)...")
     net_output, success = run_command_with_timeout(
-        ["termux-location", "-p", "network"], 5
+        ["termux-location", "-p", "network"], 10
     )
 
     if success and net_output:
@@ -192,12 +195,12 @@ def take_selfie():
     taken_files = []
 
     # -----------------------------------------------
-    # 🎙️ 1. 오디오 녹음 시작 (-f 제거, 기본 이름 사용)
+    # 🎙️ 1. 오디오 녹음 시작
     # -----------------------------------------------
     audio_proc = None
     final_audio = f"{target_dir}/{timestamp}_audio.m4a"
 
-    print(f"🎙️ 30초 녹음 시작 (기본 파일명 사용)...")
+    print(f"🎙️ 30초 녹음 시작...")
     try:
         # -f 옵션 제거: Termux가 알아서 /sdcard/에 저장하도록 함
         audio_proc = subprocess.Popen(
@@ -209,7 +212,7 @@ def take_selfie():
         print(f"❌ 녹음 시작 실패: {e}")
 
     # -----------------------------------------------
-    # 🛰️ 2. 위치 정보 가져오기 (개선된 타임아웃)
+    # 🛰️ 2. 위치 정보 가져오기 (개선된 타임아웃 5s/10s)
     # -----------------------------------------------
     location_info = get_best_location()
 
@@ -252,7 +255,6 @@ def take_selfie():
         print("⏳ 녹음 완료 대기 중 (최대 30초)...")
         audio_proc.wait()
 
-        # 폰 루트에서 최신 녹음 파일 찾기
         latest_rec = find_latest_recording("/sdcard/")
 
         if latest_rec and os.path.exists(latest_rec):
