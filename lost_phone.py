@@ -4,7 +4,7 @@ from datetime import datetime
 import os
 import configparser
 import json
-import shutil  # 🚨 파일 이동을 위해 추가
+import shutil
 
 import smtplib
 from email.mime.text import MIMEText
@@ -102,9 +102,17 @@ def get_best_location():
 # =========================================================
 def send_photo_email(filenames, subject_text, location_info):
     config = configparser.ConfigParser()
-    if not config.read("config.ini"):
-        print("❌ 오류: config.ini 파일을 찾을 수 없습니다.")
-        return False
+    # config.ini 파일 경로도 절대 경로로 찾거나 현재 경로 확인
+    if not os.path.exists("config.ini"):
+        # 혹시 모를 경로 문제를 위해 홈 디렉토리에서도 찾아봅니다.
+        home_config = "/data/data/com.termux/files/home/config.ini"
+        if os.path.exists(home_config):
+            config.read(home_config)
+        else:
+            print("❌ 오류: config.ini 파일을 찾을 수 없습니다.")
+            return False
+    else:
+        config.read("config.ini")
 
     try:
         settings = config["EMAIL_CONFIG"]
@@ -156,22 +164,28 @@ def send_photo_email(filenames, subject_text, location_info):
 # 📷 메인 촬영 및 녹음 함수
 # =========================================================
 def take_selfie():
-    # 최종 저장 경로
     target_dir = "/sdcard/Documents/termux"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     taken_files = []
 
     # -----------------------------------------------
-    # 🎙️ 1. 오디오 녹음 시작 (임시 경로 사용 -> 이동 전략)
+    # 🎙️ 1. 오디오 녹음 시작 (절대 경로 사용)
     # -----------------------------------------------
-    # 🚨 수정: 녹음은 무조건 Termux 내부(현재 폴더)에 먼저 저장합니다. (오류 방지)
-    temp_audio = "temp_record.m4a"
+    # 🚨 수정: Termux 홈 디렉터리의 절대 경로를 지정하여 파이썬이 파일을 못 찾는 문제 해결
+    termux_home = "/data/data/com.termux/files/home"
+    temp_audio = f"{termux_home}/temp_record.m4a"
     final_audio = f"{target_dir}/{timestamp}_audio.m4a"
+
     audio_proc = None
 
     print(f"🎙️ 30초 녹음 시작 (백그라운드)...")
+    print(f"   (임시 저장 경로: {temp_audio})")  # 디버깅용 출력
+
     try:
-        # 파일명을 temp_audio로 설정
+        # 기존 파일이 있다면 삭제 (충돌 방지)
+        if os.path.exists(temp_audio):
+            os.remove(temp_audio)
+
         audio_proc = subprocess.Popen(
             ["termux-microphone-record", "-d", "30", "-f", temp_audio],
             stdout=subprocess.PIPE,
@@ -218,27 +232,24 @@ def take_selfie():
             print(f"  ❌ {name} 촬영 실패 (권한 또는 하드웨어 오류)")
 
     # -----------------------------------------------
-    # ⏳ 4. 녹음 완료 대기 및 파일 이동 (핵심 수정)
+    # ⏳ 4. 녹음 완료 대기 및 파일 이동
     # -----------------------------------------------
     if audio_proc:
         print("⏳ 녹음 완료 대기 중 (최대 30초)...")
-        audio_proc.wait()  # 녹음 종료 대기
+        audio_proc.wait()
 
-        # 🚨 수정: 임시 파일을 최종 목적지(Documents/termux)로 이동
+        # 절대 경로로 파일 확인
         if os.path.exists(temp_audio):
             try:
-                shutil.move(temp_audio, final_audio)
+                # shutil.move는 대상 경로에 파일이 있으면 에러가 날 수 있어 복사 후 삭제로 처리
+                shutil.copy2(temp_audio, final_audio)
+                os.remove(temp_audio)  # 임시 파일 삭제
                 print(f"✅ 녹음 파일 이동 완료: {os.path.basename(final_audio)}")
                 taken_files.append(final_audio)
             except Exception as e:
                 print(f"❌ 녹음 파일 이동 실패: {e}")
         else:
-            # 혹시라도 바로 저장되었는지 확인 (방어 코드)
-            if os.path.exists(final_audio):
-                print(f"✅ 녹음 완료 (직접 저장됨): {os.path.basename(final_audio)}")
-                taken_files.append(final_audio)
-            else:
-                print("❌ 녹음 파일 생성 실패 (임시 파일 없음)")
+            print(f"❌ 녹음 파일 생성 실패 (파일 없음: {temp_audio})")
 
     # -----------------------------------------------
     # 📧 5. 이메일 발송
@@ -256,7 +267,6 @@ if __name__ == "__main__":
     print("🔒 Wake Lock 설정됨")
 
     try:
-        # 폴더 생성 (Documents/termux)
         os.makedirs("/sdcard/Documents/termux", exist_ok=True)
         take_selfie()
     finally:
