@@ -4,6 +4,7 @@ from datetime import datetime
 import os
 import configparser
 import json
+import shutil  # 🚨 파일 이동을 위해 추가
 
 import smtplib
 from email.mime.text import MIMEText
@@ -61,13 +62,13 @@ def format_location_info(loc_json):
 
 
 # =========================================================
-# 🛰️ 위치 정보 획득 함수 (Killer 적용됨, 시간 10초)
+# 🛰️ 위치 정보 획득 함수 (Killer 적용됨, 시간 3초/5초)
 # =========================================================
 def get_best_location():
     print("🛰️ 위치 정보 탐색 시작...")
 
-    print("  [1단계] GPS 정밀 탐색 시도 (10초)...")
-    gps_output, success = run_command_with_timeout(["termux-location", "-p", "gps"], 10)
+    print("  [1단계] GPS 정밀 탐색 시도 (3초)...")
+    gps_output, success = run_command_with_timeout(["termux-location", "-p", "gps"], 3)
 
     if success and gps_output:
         try:
@@ -77,12 +78,11 @@ def get_best_location():
         except json.JSONDecodeError:
             pass
 
-    print("  ⚠️ GPS 탐색 실패 또는 시간 초과. (프로세스 Kill 완료)")
-    print("  🔄 네트워크로 전환합니다.")
+    print("  ⚠️ GPS 탐색 실패. (빠르게 네트워크로 전환)")
 
-    print("  [2단계] 네트워크 기반 탐색 시도 (10초)...")
+    print("  [2단계] 네트워크 기반 탐색 시도 (5초)...")
     net_output, success = run_command_with_timeout(
-        ["termux-location", "-p", "network"], 10
+        ["termux-location", "-p", "network"], 5
     )
 
     if success and net_output:
@@ -119,7 +119,6 @@ def send_photo_email(filenames, subject_text, location_info):
         msg["To"] = RECIPIENT_EMAIL
         msg["Subject"] = subject_text
 
-        # 본문 수정
         photo_count = len([f for f in filenames if f.endswith(".jpg")])
         body = (
             f"침입자 감지 알림입니다.\n"
@@ -157,22 +156,24 @@ def send_photo_email(filenames, subject_text, location_info):
 # 📷 메인 촬영 및 녹음 함수
 # =========================================================
 def take_selfie():
-    # 🚨 저장 경로 수정: Documents/termux 폴더로 변경
+    # 최종 저장 경로
     target_dir = "/sdcard/Documents/termux"
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     taken_files = []
 
     # -----------------------------------------------
-    # 🎙️ 1. 오디오 녹음 시작 (백그라운드 실행)
+    # 🎙️ 1. 오디오 녹음 시작 (임시 경로 사용 -> 이동 전략)
     # -----------------------------------------------
-    audio_filename = f"{target_dir}/{timestamp}_audio.m4a"
+    # 🚨 수정: 녹음은 무조건 Termux 내부(현재 폴더)에 먼저 저장합니다. (오류 방지)
+    temp_audio = "temp_record.m4a"
+    final_audio = f"{target_dir}/{timestamp}_audio.m4a"
     audio_proc = None
 
     print(f"🎙️ 30초 녹음 시작 (백그라운드)...")
     try:
+        # 파일명을 temp_audio로 설정
         audio_proc = subprocess.Popen(
-            ["termux-microphone-record", "-d", "30", "-f", audio_filename],
+            ["termux-microphone-record", "-d", "30", "-f", temp_audio],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -180,12 +181,12 @@ def take_selfie():
         print(f"❌ 녹음 시작 실패: {e}")
 
     # -----------------------------------------------
-    # 🛰️ 2. 위치 정보 가져오기 (녹음 중에 수행)
+    # 🛰️ 2. 위치 정보 가져오기
     # -----------------------------------------------
     location_info = get_best_location()
 
     # -----------------------------------------------
-    # 📷 3. 카메라 촬영 (녹음 중에 수행)
+    # 📷 3. 카메라 촬영
     # -----------------------------------------------
     shooting_sequence = [
         {"name": "front", "id": 1},
@@ -217,17 +218,27 @@ def take_selfie():
             print(f"  ❌ {name} 촬영 실패 (권한 또는 하드웨어 오류)")
 
     # -----------------------------------------------
-    # ⏳ 4. 녹음 완료 대기 및 파일 추가
+    # ⏳ 4. 녹음 완료 대기 및 파일 이동 (핵심 수정)
     # -----------------------------------------------
     if audio_proc:
         print("⏳ 녹음 완료 대기 중 (최대 30초)...")
-        audio_proc.wait()  # 녹음이 끝날 때까지 기다립니다.
+        audio_proc.wait()  # 녹음 종료 대기
 
-        if os.path.exists(audio_filename):
-            print(f"✅ 녹음 완료: {os.path.basename(audio_filename)}")
-            taken_files.append(audio_filename)  # 전송 목록에 추가
+        # 🚨 수정: 임시 파일을 최종 목적지(Documents/termux)로 이동
+        if os.path.exists(temp_audio):
+            try:
+                shutil.move(temp_audio, final_audio)
+                print(f"✅ 녹음 파일 이동 완료: {os.path.basename(final_audio)}")
+                taken_files.append(final_audio)
+            except Exception as e:
+                print(f"❌ 녹음 파일 이동 실패: {e}")
         else:
-            print("❌ 녹음 파일 생성 실패")
+            # 혹시라도 바로 저장되었는지 확인 (방어 코드)
+            if os.path.exists(final_audio):
+                print(f"✅ 녹음 완료 (직접 저장됨): {os.path.basename(final_audio)}")
+                taken_files.append(final_audio)
+            else:
+                print("❌ 녹음 파일 생성 실패 (임시 파일 없음)")
 
     # -----------------------------------------------
     # 📧 5. 이메일 발송
@@ -245,7 +256,7 @@ if __name__ == "__main__":
     print("🔒 Wake Lock 설정됨")
 
     try:
-        # 🚨 폴더 자동 생성 경로도 Documents로 수정
+        # 폴더 생성 (Documents/termux)
         os.makedirs("/sdcard/Documents/termux", exist_ok=True)
         take_selfie()
     finally:
