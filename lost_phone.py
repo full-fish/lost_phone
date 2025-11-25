@@ -16,12 +16,10 @@ from email import encoders
 # 🔋 전원 관리 함수 (Wake Lock)
 # =========================================================
 def acquire_wake_lock():
-    # 안드로이드가 스크립트 실행 중 절전 모드로 들어가는 것을 방지
     subprocess.run(["termux-wake-lock"])
 
 
 def release_wake_lock():
-    # 작업이 끝나면 락 해제
     subprocess.run(["termux-wake-unlock"])
 
 
@@ -63,12 +61,11 @@ def format_location_info(loc_json):
 
 
 # =========================================================
-# 🛰️ 위치 정보 획득 함수 (Killer 적용됨, 시간 10초로 수정)
+# 🛰️ 위치 정보 획득 함수 (Killer 적용됨, 시간 10초)
 # =========================================================
 def get_best_location():
     print("🛰️ 위치 정보 탐색 시작...")
 
-    # 1단계: GPS (High Accuracy) 시도
     print("  [1단계] GPS 정밀 탐색 시도 (10초)...")
     gps_output, success = run_command_with_timeout(["termux-location", "-p", "gps"], 10)
 
@@ -83,7 +80,6 @@ def get_best_location():
     print("  ⚠️ GPS 탐색 실패 또는 시간 초과. (프로세스 Kill 완료)")
     print("  🔄 네트워크로 전환합니다.")
 
-    # 2단계: Network (Wi-Fi/Cell) 시도
     print("  [2단계] 네트워크 기반 탐색 시도 (10초)...")
     net_output, success = run_command_with_timeout(
         ["termux-location", "-p", "network"], 10
@@ -123,7 +119,7 @@ def send_photo_email(filenames, subject_text, location_info):
         msg["To"] = RECIPIENT_EMAIL
         msg["Subject"] = subject_text
 
-        # 본문 구성
+        # 본문 수정
         photo_count = len([f for f in filenames if f.endswith(".jpg")])
         body = (
             f"침입자 감지 알림입니다.\n"
@@ -161,7 +157,9 @@ def send_photo_email(filenames, subject_text, location_info):
 # 📷 메인 촬영 및 녹음 함수
 # =========================================================
 def take_selfie():
-    target_dir = "/sdcard/DCIM/termux"
+    # 🚨 저장 경로 수정: Documents/termux 폴더로 변경
+    target_dir = "/sdcard/Documents/termux"
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     taken_files = []
 
@@ -173,8 +171,6 @@ def take_selfie():
 
     print(f"🎙️ 30초 녹음 시작 (백그라운드)...")
     try:
-        # Popen을 사용하여 녹음을 시작하고 바로 다음 코드로 넘어갑니다.
-        # -d 30: 30초 동안 녹음
         audio_proc = subprocess.Popen(
             ["termux-microphone-record", "-d", "30", "-f", audio_filename],
             stdout=subprocess.PIPE,
@@ -249,7 +245,8 @@ if __name__ == "__main__":
     print("🔒 Wake Lock 설정됨")
 
     try:
-        os.makedirs("/sdcard/DCIM/termux", exist_ok=True)
+        # 🚨 폴더 자동 생성 경로도 Documents로 수정
+        os.makedirs("/sdcard/Documents/termux", exist_ok=True)
         take_selfie()
     finally:
         release_wake_lock()
