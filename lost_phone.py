@@ -5,7 +5,7 @@ import os
 import configparser
 import json
 import shutil
-import glob
+import glob  # 🚨 파일 패턴 찾기를 위해 추가
 
 import smtplib
 from email.mime.text import MIMEText
@@ -40,10 +40,7 @@ def run_command_with_timeout(cmd_list, timeout_sec):
             return None, False
     except subprocess.TimeoutExpired:
         proc.kill()
-        try:
-            proc.communicate(timeout=1)
-        except:
-            pass
+        proc.communicate()
         return None, False
     except Exception as e:
         return None, False
@@ -66,7 +63,7 @@ def format_location_info(loc_json):
 
 
 # =========================================================
-# 🛰️ 위치 정보 획득 함수
+# 🛰️ 위치 정보 획득 함수 (안정적인 3단계)
 # =========================================================
 def get_best_location():
     print("🛰️ 위치 정보 탐색 시작...")
@@ -97,8 +94,24 @@ def get_best_location():
         except json.JSONDecodeError:
             pass
 
+    print("  ⚠️ 네트워크 탐색 실패. (마지막 위치 조회)")
+
+    # 3단계: 마지막 위치 (Last Known Location)
+    print("  [3단계] 마지막 저장된 위치 가져오기...")
+    last_output, success = run_command_with_timeout(
+        ["termux-location", "-r", "last"], 3
+    )
+
+    if success and last_output:
+        try:
+            info = format_location_info(json.loads(last_output))
+            print("  ✅ 마지막 위치 확보 성공.")
+            return f"위치 정보 (마지막 기록):\n{info}"
+        except json.JSONDecodeError:
+            pass
+
     print("  ❌ 모든 위치 탐색 실패.")
-    return "위치 정보 획득 실패 (GPS 및 네트워크 응답 없음)"
+    return "위치 정보 획득 실패 (권한 확인 필요)"
 
 
 # =========================================================
@@ -133,7 +146,7 @@ def send_photo_email(filenames, subject_text, location_info):
         body = (
             f"침입자 감지 알림입니다.\n"
             f"- 사진: {photo_count}장\n"
-            f"- 녹음: 포함됨 (30초)\n\n"
+            f"- 녹음: 포함됨 (60초)\n\n"  # 🚨 60초로 변경
             f"--- 위치 정보 ---\n{location_info}\n-----------------"
         )
         msg.attach(MIMEText(body, "plain"))
@@ -163,14 +176,17 @@ def send_photo_email(filenames, subject_text, location_info):
 
 
 # =========================================================
-# 🔍 최신 녹음 파일 찾기 함수
+# 🔍 최신 녹음 파일 찾기 함수 (추가됨)
 # =========================================================
 def find_latest_recording(search_dir="/sdcard/"):
     pattern = os.path.join(search_dir, "TermuxAudioRecording*.m4a")
     files = glob.glob(pattern)
+
     if not files:
         return None
-    return max(files, key=os.path.getmtime)
+
+    latest_file = max(files, key=os.path.getmtime)
+    return latest_file
 
 
 # =========================================================
@@ -182,29 +198,29 @@ def take_selfie():
     taken_files = []
 
     # -----------------------------------------------
-    # 🎙️ 1. 오디오 녹음 시작 (수동 종료 방식)
+    # 🎙️ 1. 오디오 녹음 시작 (D-60으로 시간 관리를 맡김)
     # -----------------------------------------------
+    audio_proc = None
     final_audio = f"{target_dir}/{timestamp}_audio.m4a"
-    RECORD_SECONDS = 30  # 🚨 녹음 시간 설정 (초)
 
-    print(f"🎙️ 녹음 시작 ({RECORD_SECONDS}초 확보 예정)...")
-
-    # 혹시 실행 중인 녹음이 있으면 정리
-    subprocess.run(["termux-microphone-record", "-q"], stderr=subprocess.DEVNULL)
-
-    # 녹음 시작 (기본 파일명 사용)
-    subprocess.Popen(["termux-microphone-record"])
-
-    # 🚨 시작 시간 기록 (시간 계산용)
-    record_start_time = time.time()
+    print(f"🎙️ 60초 녹음 시작 (백그라운드, D-60으로 시간 관리)...")  # 🚨 60초로 변경
+    try:
+        # 🚨 수정: -d 30 -> -d 60으로 변경
+        audio_proc = subprocess.Popen(
+            ["termux-microphone-record", "-d", "60"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except Exception as e:
+        print(f"❌ 녹음 시작 실패: {e}")
 
     # -----------------------------------------------
-    # 🛰️ 2. 위치 정보 가져오기
+    # 🛰️ 2. 위치 정보 가져오기 (녹음 중에 수행)
     # -----------------------------------------------
     location_info = get_best_location()
 
     # -----------------------------------------------
-    # 📷 3. 카메라 촬영
+    # 📷 3. 카메라 촬영 (녹음 중에 수행)
     # -----------------------------------------------
     shooting_sequence = [
         {"name": "front", "id": 1},
@@ -236,53 +252,44 @@ def take_selfie():
             print(f"  ❌ {name} 촬영 실패 (권한 또는 하드웨어 오류)")
 
     # -----------------------------------------------
-    # ⏳ 4. 남은 시간 대기 및 녹음 종료 (핵심)
+    # ⏳ 4. 녹음 완료 대기 및 파일 찾아서 이동 (핵심 수정)
     # -----------------------------------------------
-    elapsed_time = time.time() - record_start_time
-    remaining_time = RECORD_SECONDS - elapsed_time
+    if audio_proc:
+        print("⏳ 녹음 완료 대기 중 (최대 60초)...")  # 🚨 60초로 변경
+        # D-60 옵션이 60초를 책임집니다.
+        audio_proc.wait()
 
-    if remaining_time > 0:
-        print(f"⏳ 녹음 시간 확보를 위해 {remaining_time:.1f}초 대기 중...")
-        time.sleep(remaining_time)
+        # 폰 루트에서 최신 녹음 파일 찾기
+        latest_rec = find_latest_recording("/sdcard/")
 
-    print("🛑 녹음 종료 명령 전송...")
-    # 🚨 녹음 강제 종료 (-q 옵션)
-    subprocess.run(["termux-microphone-record", "-q"])
-
-    # 종료 후 파일 저장될 시간 살짝 대기
-    time.sleep(1)
-
-    # -----------------------------------------------
-    # 📂 5. 파일 찾기 및 이동
-    # -----------------------------------------------
-    latest_rec = find_latest_recording("/sdcard/")
-
-    if latest_rec and os.path.exists(latest_rec):
-        try:
-            shutil.move(latest_rec, final_audio)
-            print(f"✅ 녹음 파일 발견 및 이동 완료: {os.path.basename(final_audio)}")
-            taken_files.append(final_audio)
-        except Exception as e:
-            print(f"❌ 녹음 파일 이동 실패: {e}")
-    else:
-        # Termux 홈 확인
-        termux_home = os.getenv("HOME", "/data/data/com.termux/files/home")
-        latest_rec_home = find_latest_recording(termux_home)
-
-        if latest_rec_home and os.path.exists(latest_rec_home):
+        if latest_rec and os.path.exists(latest_rec):
             try:
-                shutil.move(latest_rec_home, final_audio)
+                shutil.move(latest_rec, final_audio)
                 print(
-                    f"✅ 녹음 파일(홈) 발견 및 이동 완료: {os.path.basename(final_audio)}"
+                    f"✅ 녹음 파일 발견 및 이동 완료: {os.path.basename(final_audio)}"
                 )
                 taken_files.append(final_audio)
             except Exception as e:
                 print(f"❌ 녹음 파일 이동 실패: {e}")
         else:
-            print("❌ 녹음 파일을 찾을 수 없습니다.")
+            # Termux 홈 확인
+            termux_home = os.getenv("HOME", "/data/data/com.termux/files/home")
+            latest_rec_home = find_latest_recording(termux_home)
+
+            if latest_rec_home and os.path.exists(latest_rec_home):
+                try:
+                    shutil.move(latest_rec_home, final_audio)
+                    print(
+                        f"✅ 녹음 파일(홈) 발견 및 이동 완료: {os.path.basename(final_audio)}"
+                    )
+                    taken_files.append(final_audio)
+                except Exception as e:
+                    print(f"❌ 녹음 파일 이동 실패: {e}")
+            else:
+                print("❌ 녹음 파일을 찾을 수 없습니다. (저장 실패)")
 
     # -----------------------------------------------
-    # 📧 6. 이메일 발송
+    # 📧 5. 이메일 발송
     # -----------------------------------------------
     if taken_files:
         print("\n📧 이메일 전송 준비...")
