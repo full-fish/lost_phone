@@ -100,13 +100,13 @@ def take_selfie():
     # -----------------------------------------------
     location_info = ""
     try:
-        print("🛰️ GPS 위치 정보 수신 중... (최대 15초 대기)")
+        print("🛰️ GPS 위치 정보 수신 중... (최대 30초 대기)")
         loc_result = subprocess.run(
-            ["termux-location", "-p", "high"],
+            ["termux-location"],
             capture_output=True,
             text=True,
             check=True,
-            timeout=15,
+            timeout=30,
         )
         loc_json = json.loads(loc_result.stdout)
 
