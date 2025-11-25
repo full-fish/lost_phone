@@ -38,7 +38,7 @@ def get_best_location():
     try:
         print("  [1단계] GPS 정밀 탐색 시도 (15초)...")
         res = subprocess.run(
-            ["termux-location", "-p", "high"],
+            ["termux-location", "-p", "gps"],
             capture_output=True,
             text=True,
             check=True,
