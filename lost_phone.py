@@ -16,10 +16,12 @@ from email import encoders
 # 🔋 전원 관리 함수 (Wake Lock)
 # =========================================================
 def acquire_wake_lock():
+    # 안드로이드가 스크립트 실행 중 절전 모드로 들어가는 것을 방지
     subprocess.run(["termux-wake-lock"])
 
 
 def release_wake_lock():
+    # 작업이 끝나면 락 해제
     subprocess.run(["termux-wake-unlock"])
 
 
@@ -27,33 +29,19 @@ def release_wake_lock():
 # 🛠️ 안전한 명령어 실행 함수 (Killer 기능 포함)
 # =========================================================
 def run_command_with_timeout(cmd_list, timeout_sec):
-    """
-    명령어를 실행하되, 시간이 초과되면 프로세스를 확실히 죽입니다.
-    성공 시: (stdout, True) 반환
-    실패/초과 시: (None, False) 반환
-    """
     try:
-        # Popen으로 프로세스를 엽니다.
         proc = subprocess.Popen(
             cmd_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
-
-        # 정해진 시간만큼 기다립니다.
         stdout, stderr = proc.communicate(timeout=timeout_sec)
-
-        # 실행이 잘 끝났으면 결과 반환
         if proc.returncode == 0:
             return stdout, True
         else:
             return None, False
-
     except subprocess.TimeoutExpired:
-        # 🚨 시간이 초과되면 프로세스를 강제로 죽입니다 (Kill)
         proc.kill()
-        # 좀비 프로세스가 되지 않게 뒷정리(communicate)를 한 번 더 해줍니다.
         proc.communicate()
         return None, False
-
     except Exception as e:
         return None, False
 
@@ -75,16 +63,14 @@ def format_location_info(loc_json):
 
 
 # =========================================================
-# 🛰️ 위치 정보 획득 함수 (Killer 적용됨)
+# 🛰️ 위치 정보 획득 함수 (Killer 적용됨, 시간 10초로 수정)
 # =========================================================
 def get_best_location():
     print("🛰️ 위치 정보 탐색 시작...")
 
-    # 1단계: GPS (High Accuracy) 우선 시도
-    print("  [1단계] GPS 정밀 탐색 시도 (15초)...")
-
-    # 위에서 만든 '안전한 실행 함수'를 사용합니다.
-    gps_output, success = run_command_with_timeout(["termux-location", "-p", "gps"], 15)
+    # 1단계: GPS (High Accuracy) 시도
+    print("  [1단계] GPS 정밀 탐색 시도 (10초)...")
+    gps_output, success = run_command_with_timeout(["termux-location", "-p", "gps"], 10)
 
     if success and gps_output:
         try:
@@ -92,16 +78,15 @@ def get_best_location():
             print("  ✅ GPS 위치 확보 성공.")
             return f"위치 정보 (GPS):\n{info}"
         except json.JSONDecodeError:
-            pass  # JSON 파싱 에러나면 다음으로 넘어감
+            pass
 
     print("  ⚠️ GPS 탐색 실패 또는 시간 초과. (프로세스 Kill 완료)")
     print("  🔄 네트워크로 전환합니다.")
 
     # 2단계: Network (Wi-Fi/Cell) 시도
-    print("  [2단계] 네트워크 기반 탐색 시도 (15초)...")
-
+    print("  [2단계] 네트워크 기반 탐색 시도 (10초)...")
     net_output, success = run_command_with_timeout(
-        ["termux-location", "-p", "network"], 15
+        ["termux-location", "-p", "network"], 10
     )
 
     if success and net_output:
@@ -138,8 +123,12 @@ def send_photo_email(filenames, subject_text, location_info):
         msg["To"] = RECIPIENT_EMAIL
         msg["Subject"] = subject_text
 
+        # 본문 구성
+        photo_count = len([f for f in filenames if f.endswith(".jpg")])
         body = (
-            f"침입자 감지 알림입니다. (총 {len(filenames)}장)\n\n"
+            f"침입자 감지 알림입니다.\n"
+            f"- 사진: {photo_count}장\n"
+            f"- 녹음: 포함됨\n\n"
             f"--- 위치 정보 ---\n{location_info}\n-----------------"
         )
         msg.attach(MIMEText(body, "plain"))
@@ -169,17 +158,39 @@ def send_photo_email(filenames, subject_text, location_info):
 
 
 # =========================================================
-# 📷 메인 촬영 함수
+# 📷 메인 촬영 및 녹음 함수
 # =========================================================
 def take_selfie():
     target_dir = "/sdcard/DCIM/termux"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     taken_files = []
 
-    # 1. 위치 정보 가져오기 (GPS -> 15초 -> Kill -> Network -> 15초)
+    # -----------------------------------------------
+    # 🎙️ 1. 오디오 녹음 시작 (백그라운드 실행)
+    # -----------------------------------------------
+    audio_filename = f"{target_dir}/{timestamp}_audio.m4a"
+    audio_proc = None
+
+    print(f"🎙️ 30초 녹음 시작 (백그라운드)...")
+    try:
+        # Popen을 사용하여 녹음을 시작하고 바로 다음 코드로 넘어갑니다.
+        # -d 30: 30초 동안 녹음
+        audio_proc = subprocess.Popen(
+            ["termux-microphone-record", "-d", "30", "-f", audio_filename],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except Exception as e:
+        print(f"❌ 녹음 시작 실패: {e}")
+
+    # -----------------------------------------------
+    # 🛰️ 2. 위치 정보 가져오기 (녹음 중에 수행)
+    # -----------------------------------------------
     location_info = get_best_location()
 
-    # 2. 촬영 시퀀스 설정 (전면 1장, 후면 1장)
+    # -----------------------------------------------
+    # 📷 3. 카메라 촬영 (녹음 중에 수행)
+    # -----------------------------------------------
     shooting_sequence = [
         {"name": "front", "id": 1},
         {"name": "back", "id": 0},
@@ -209,13 +220,28 @@ def take_selfie():
         except subprocess.CalledProcessError:
             print(f"  ❌ {name} 촬영 실패 (권한 또는 하드웨어 오류)")
 
-    # 3. 이메일 발송
+    # -----------------------------------------------
+    # ⏳ 4. 녹음 완료 대기 및 파일 추가
+    # -----------------------------------------------
+    if audio_proc:
+        print("⏳ 녹음 완료 대기 중 (최대 30초)...")
+        audio_proc.wait()  # 녹음이 끝날 때까지 기다립니다.
+
+        if os.path.exists(audio_filename):
+            print(f"✅ 녹음 완료: {os.path.basename(audio_filename)}")
+            taken_files.append(audio_filename)  # 전송 목록에 추가
+        else:
+            print("❌ 녹음 파일 생성 실패")
+
+    # -----------------------------------------------
+    # 📧 5. 이메일 발송
+    # -----------------------------------------------
     if taken_files:
         print("\n📧 이메일 전송 준비...")
-        subject = f"🚨 Lost Phone 감지 ({datetime.now().strftime('%Y-%m-%d %H:%M')})"
+        subject = f"🚨 Lost Phone 감지 (사진+녹음) ({datetime.now().strftime('%Y-%m-%d %H:%M')})"
         send_photo_email(taken_files, subject, location_info)
     else:
-        print("\n❌ 촬영된 사진이 없습니다.")
+        print("\n❌ 전송할 파일이 없습니다.")
 
 
 if __name__ == "__main__":
