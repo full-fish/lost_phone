@@ -5,7 +5,7 @@ import os
 import configparser
 import json
 import shutil
-import glob  # 🚨 파일 패턴 찾기를 위해 추가
+import glob
 
 import smtplib
 from email.mime.text import MIMEText
@@ -26,22 +26,31 @@ def release_wake_lock():
 
 
 # =========================================================
-# 🛠️ 안전한 명령어 실행 함수 (Killer 기능 포함)
+# 🛠️ 안전한 명령어 실행 함수 (OS timeout 사용)
 # =========================================================
-def run_command_with_timeout(cmd_list, timeout_sec):
+def run_command_force_timeout(cmd_list, timeout_sec):
+    """
+    OS의 'timeout' 명령어를 사용하여 프로세스를 강제로 종료시킵니다.
+    requires: pkg install coreutils
+    """
     try:
+        # timeout 명령어 구성: timeout [시간] [명령어...]
+        # -k 1: 종료 신호 후 1초 뒤에도 안 죽으면 강제 살해(KILL) 신호 전송
+        full_cmd = ["timeout", "-k", "1", str(timeout_sec)] + cmd_list
+
         proc = subprocess.Popen(
-            cmd_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            full_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
-        stdout, stderr = proc.communicate(timeout=timeout_sec)
+
+        # 파이썬 측에서도 조금 더 여유를 두고 기다림
+        stdout, stderr = proc.communicate(timeout=timeout_sec + 2)
+
+        # timeout 명령어로 죽었으면 returncode는 124가 됨
         if proc.returncode == 0:
             return stdout, True
         else:
             return None, False
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.communicate()
-        return None, False
+
     except Exception as e:
         return None, False
 
@@ -63,13 +72,14 @@ def format_location_info(loc_json):
 
 
 # =========================================================
-# 🛰️ 위치 정보 획득 함수 (Killer 적용됨, 시간 3초/5초)
+# 🛰️ 위치 정보 획득 함수 (강제 종료 + 회복 시간)
 # =========================================================
 def get_best_location():
     print("🛰️ 위치 정보 탐색 시작...")
 
-    print("  [1단계] GPS 정밀 탐색 시도 (3초)...")
-    gps_output, success = run_command_with_timeout(["termux-location", "-p", "gps"], 3)
+    # 1단계: GPS (High Accuracy) 시도 - 3초 칼같이 제한
+    print("  [1단계] GPS 정밀 탐색 시도 (3초 제한)...")
+    gps_output, success = run_command_force_timeout(["termux-location", "-p", "gps"], 3)
 
     if success and gps_output:
         try:
@@ -79,11 +89,13 @@ def get_best_location():
         except json.JSONDecodeError:
             pass
 
-    print("  ⚠️ GPS 탐색 실패. (빠르게 네트워크로 전환)")
+    print("  ⚠️ GPS 탐색 실패. (API 회복 대기 1초...)")
+    time.sleep(1)  # 🚨 중요: 강제 종료 후 API가 정신 차릴 시간 부여
 
-    print("  [2단계] 네트워크 기반 탐색 시도 (5초)...")
-    net_output, success = run_command_with_timeout(
-        ["termux-location", "-p", "network"], 5
+    # 2단계: Network (Wi-Fi/Cell) 시도 - 10초 여유 있게
+    print("  [2단계] 네트워크 기반 탐색 시도 (10초)...")
+    net_output, success = run_command_force_timeout(
+        ["termux-location", "-p", "network"], 10
     )
 
     if success and net_output:
@@ -160,19 +172,14 @@ def send_photo_email(filenames, subject_text, location_info):
 
 
 # =========================================================
-# 🔍 최신 녹음 파일 찾기 함수 (추가됨)
+# 🔍 최신 녹음 파일 찾기 함수
 # =========================================================
 def find_latest_recording(search_dir="/sdcard/"):
-    # TermuxAudioRecording*.m4a 패턴으로 파일 검색
     pattern = os.path.join(search_dir, "TermuxAudioRecording*.m4a")
     files = glob.glob(pattern)
-
     if not files:
         return None
-
-    # 수정 시간 기준으로 정렬하여 가장 최신 파일 반환
-    latest_file = max(files, key=os.path.getmtime)
-    return latest_file
+    return max(files, key=os.path.getmtime)
 
 
 # =========================================================
@@ -184,14 +191,13 @@ def take_selfie():
     taken_files = []
 
     # -----------------------------------------------
-    # 🎙️ 1. 오디오 녹음 시작 (파일명 지정 안 함 -> 기본 이름 사용)
+    # 🎙️ 1. 오디오 녹음 시작
     # -----------------------------------------------
     audio_proc = None
     final_audio = f"{target_dir}/{timestamp}_audio.m4a"
 
-    print(f"🎙️ 30초 녹음 시작 (기본 파일명 사용)...")
+    print(f"🎙️ 30초 녹음 시작...")
     try:
-        # 🚨 수정: -f 옵션을 제거하여 Termux가 알아서 저장하게 둠
         audio_proc = subprocess.Popen(
             ["termux-microphone-record", "-d", "30"],
             stdout=subprocess.PIPE,
@@ -201,7 +207,7 @@ def take_selfie():
         print(f"❌ 녹음 시작 실패: {e}")
 
     # -----------------------------------------------
-    # 🛰️ 2. 위치 정보 가져오기
+    # 🛰️ 2. 위치 정보 가져오기 (timeout 명령어 적용)
     # -----------------------------------------------
     location_info = get_best_location()
 
@@ -238,18 +244,16 @@ def take_selfie():
             print(f"  ❌ {name} 촬영 실패 (권한 또는 하드웨어 오류)")
 
     # -----------------------------------------------
-    # ⏳ 4. 녹음 완료 대기 및 파일 찾아서 이동 (핵심 수정)
+    # ⏳ 4. 녹음 완료 대기 및 파일 이동
     # -----------------------------------------------
     if audio_proc:
         print("⏳ 녹음 완료 대기 중 (최대 30초)...")
         audio_proc.wait()
 
-        # 🚨 수정: 폰 루트(/sdcard/)에서 가장 최근에 생긴 TermuxAudio... 파일을 찾음
         latest_rec = find_latest_recording("/sdcard/")
 
         if latest_rec and os.path.exists(latest_rec):
             try:
-                # 찾은 파일을 우리가 원하는 곳으로 이동 및 이름 변경
                 shutil.move(latest_rec, final_audio)
                 print(
                     f"✅ 녹음 파일 발견 및 이동 완료: {os.path.basename(final_audio)}"
@@ -258,7 +262,7 @@ def take_selfie():
             except Exception as e:
                 print(f"❌ 녹음 파일 이동 실패: {e}")
         else:
-            # 혹시 Termux 홈에 저장됐나 한 번 더 확인
+            # 홈 디렉터리 확인
             termux_home = os.getenv("HOME", "/data/data/com.termux/files/home")
             latest_rec_home = find_latest_recording(termux_home)
 
@@ -272,7 +276,7 @@ def take_selfie():
                 except Exception as e:
                     print(f"❌ 녹음 파일 이동 실패: {e}")
             else:
-                print("❌ 녹음 파일을 찾을 수 없습니다. (저장 실패)")
+                print("❌ 녹음 파일을 찾을 수 없습니다.")
 
     # -----------------------------------------------
     # 📧 5. 이메일 발송
