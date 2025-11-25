@@ -3,6 +3,7 @@ import time
 from datetime import datetime
 import os
 import configparser
+import json  # GPS 정보 처리를 위해 추가
 
 import smtplib
 from email.mime.text import MIMEText
@@ -10,15 +11,15 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 
+
 # =========================================================
-# 📧 이메일 전송 함수 (파일명 리스트를 받도록 수정됨)
+# 📧 이메일 전송 함수 (위치 정보를 본문에 포함하도록 수정됨)
 # =========================================================
 
 
-def send_photo_email(filenames, subject_text):
+def send_photo_email(filenames, subject_text, location_info):
     # 1. 설정 파일 (config.ini) 읽어오기
     config = configparser.ConfigParser()
-
     if not config.read("config.ini"):
         print("❌ 오류: config.ini 파일을 찾거나 읽을 수 없습니다.")
         return False
@@ -38,8 +39,13 @@ def send_photo_email(filenames, subject_text):
     msg["To"] = RECIPIENT_EMAIL
     msg["Subject"] = subject_text
 
-    # 4. 본문 추가
-    body = "첨부된 파일은 침입자 감지 카메라가 촬영한 사진입니다. (전면 및 후면)"
+    # 4. 본문 추가 (GPS 정보 포함)
+    body = (
+        f"첨부된 파일은 침입자 감지 카메라가 촬영한 사진입니다. (총 {len(filenames)}장)\n\n"
+        f"--- GPS 정보 ---\n"
+        f"{location_info}\n"
+        f"----------------"
+    )
     msg.attach(MIMEText(body, "plain"))
 
     # 5. 첨부 파일 추가 (리스트 처리)
@@ -82,51 +88,87 @@ def send_photo_email(filenames, subject_text):
 # 📷 사진 촬영 및 전송 통합 함수
 # =========================================================
 
-# =========================================================
-# 📷 사진 촬영 및 전송 통합 함수
-# =========================================================
-
 
 def take_selfie():
     target_dir = "/sdcard/DCIM/termux"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # 찍은 파일 목록을 저장할 리스트
     taken_files = []
 
-    # 1. 카메라 ID 목록 및 촬영 횟수 설정
-    # 카메라 ID (0: 후면, 1: 전면)
-    cameras = {"back": 0, "front": 1}
-    SHOOT_COUNT = 2  # 🚨 각 카메라당 2장씩 촬영 설정
+    # -----------------------------------------------
+    # 1. 🛰️ GPS 위치 정보 획득
+    # -----------------------------------------------
+    location_info = ""
+    try:
+        print("🛰️ GPS 위치 정보 수신 중... (최대 15초 대기)")
+        loc_result = subprocess.run(
+            ["termux-location", "-p", "high"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=15,
+        )
+        loc_json = json.loads(loc_result.stdout)
 
-    print(
-        f"📸 전면/후면 카메라 각각 {SHOOT_COUNT}장씩 총 {len(cameras) * SHOOT_COUNT}장 촬영 시작..."
-    )
+        lat = loc_json.get("latitude", "N/A")
+        lon = loc_json.get("longitude", "N/A")
+        acc = loc_json.get("accuracy", "N/A")
+        provider = loc_json.get("provider", "N/A")
 
-    for name, cam_id in cameras.items():
-        for i in range(1, SHOOT_COUNT + 1):  # 1부터 2까지 반복 (1차, 2차 촬영)
-            # 파일명과 경로를 카메라 이름 및 순번에 따라 다르게 설정
-            filename = f"{target_dir}/{timestamp}_{name.lower()}_{i:02d}.jpg"
-            command = f"termux-camera-photo -c {cam_id} {filename}"
+        location_info = (
+            f"위치 정보 획득 성공:\n"
+            f"  > 시간: {datetime.now().strftime('%H:%M:%S')}\n"
+            f"  > 위도: {lat}, 경도: {lon}\n"
+            f"  > 정확도: {acc}m, 출처: {provider}"
+        )
+        print(f"✅ 위치 정보 획득 완료.")
 
-            try:
-                print(f"  > {name} {i}차 촬영 시도 중... (ID: {cam_id})")
-                subprocess.run(command, shell=True, check=True)
-                print(f"  > {name} {i}차 촬영 성공: {os.path.basename(filename)}")
-                taken_files.append(filename)  # 성공한 파일만 목록에 추가
+    except Exception as e:
+        location_info = "위치 정보 획득 실패 (GPS 비활성, 권한 오류, 또는 시간 초과)."
+        print(f"❌ GPS 오류 발생: {e}")
 
-            except subprocess.CalledProcessError:
-                # 첫 번째 실패 시 바로 다음 카메라로 넘어가지 않고 실패 메시지 출력
-                print(
-                    f"  ❌ {name} {i}차 촬영 실패. (ID: {cam_id}가 유효하지 않거나 권한 오류)"
-                )
-                # 이 에러는 심각한 오류가 아닐 수 있으므로 루프를 계속 진행합니다.
+    # -----------------------------------------------
+    # 2. 📷 카메라 촬영 루프 (번갈아 촬영 및 딜레이)
+    # -----------------------------------------------
+    shooting_sequence = [
+        {"name": "front", "id": 1},
+        {"name": "back", "id": 0},
+        {"name": "front", "id": 1},
+        {"name": "back", "id": 0},
+    ]
 
-    # 3. 이메일 전송
+    print(f"📸 카메라 번갈아 촬영 시작 (총 {len(shooting_sequence)}장)...")
+
+    for i, camera_info in enumerate(shooting_sequence):
+        name = camera_info["name"]
+        cam_id = camera_info["id"]
+        sequence_num = i + 1
+
+        filename = f"{target_dir}/{timestamp}_{name.lower()}_{sequence_num:02d}.jpg"
+        command = f"termux-camera-photo -c {cam_id} {filename}"
+
+        if sequence_num > 1:
+            print("🕒 1초 대기...")
+            time.sleep(1)
+
+        try:
+            print(f"  > {name} {sequence_num}차 촬영 시도 중... (ID: {cam_id})")
+            subprocess.run(command, shell=True, check=True)
+            print(
+                f"  > {name} {sequence_num}차 촬영 성공: {os.path.basename(filename)}"
+            )
+            taken_files.append(filename)
+
+        except subprocess.CalledProcessError:
+            print(
+                f"  ❌ {name} {sequence_num}차 촬영 실패. (ID: {cam_id}가 유효하지 않거나 권한 오류)"
+            )
+
+    # 3. 📧 이메일 전송
     if taken_files:
         print(f"\n📧 촬영된 사진 {len(taken_files)}장을 이메일로 전송합니다.")
         subject = f"🚨 lost_phone 감지 알림 (총 {len(taken_files)}장) ({datetime.now().strftime('%Y-%m-%d %H:%M')})"
-        send_photo_email(taken_files, subject)
+        send_photo_email(taken_files, subject, location_info)  # 위치 정보 전달
     else:
         print("\n❌ 촬영된 사진이 없어 이메일을 전송하지 않습니다.")
 
@@ -142,7 +184,6 @@ if __name__ == "__main__":
         print(f"❌ 폴더 생성 실패: {e}. 권한을 확인해 주세요.")
         exit(1)
 
-    # 폰 기종에 따라 촬영이 느릴 수 있어 3초 대기 제거
     print("스크립트 실행. 촬영 및 이메일 전송 시도.")
 
     take_selfie()
