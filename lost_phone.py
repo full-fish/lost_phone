@@ -13,7 +13,53 @@ from email import encoders
 
 
 # =========================================================
-# 🛠️ 유틸리티: JSON 위치 정보 포맷팅 함수
+# 🔋 전원 관리 함수 (Wake Lock)
+# =========================================================
+def acquire_wake_lock():
+    subprocess.run(["termux-wake-lock"])
+
+
+def release_wake_lock():
+    subprocess.run(["termux-wake-unlock"])
+
+
+# =========================================================
+# 🛠️ 안전한 명령어 실행 함수 (Killer 기능 포함)
+# =========================================================
+def run_command_with_timeout(cmd_list, timeout_sec):
+    """
+    명령어를 실행하되, 시간이 초과되면 프로세스를 확실히 죽입니다.
+    성공 시: (stdout, True) 반환
+    실패/초과 시: (None, False) 반환
+    """
+    try:
+        # Popen으로 프로세스를 엽니다.
+        proc = subprocess.Popen(
+            cmd_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+
+        # 정해진 시간만큼 기다립니다.
+        stdout, stderr = proc.communicate(timeout=timeout_sec)
+
+        # 실행이 잘 끝났으면 결과 반환
+        if proc.returncode == 0:
+            return stdout, True
+        else:
+            return None, False
+
+    except subprocess.TimeoutExpired:
+        # 🚨 시간이 초과되면 프로세스를 강제로 죽입니다 (Kill)
+        proc.kill()
+        # 좀비 프로세스가 되지 않게 뒷정리(communicate)를 한 번 더 해줍니다.
+        proc.communicate()
+        return None, False
+
+    except Exception as e:
+        return None, False
+
+
+# =========================================================
+# 🛠️ 유틸리티: JSON 위치 정보 포맷팅
 # =========================================================
 def format_location_info(loc_json):
     lat = loc_json.get("latitude", "N/A")
@@ -29,43 +75,45 @@ def format_location_info(loc_json):
 
 
 # =========================================================
-# 🛰️ 위치 정보 획득 함수 (GPS -> Network 순차 시도)
+# 🛰️ 위치 정보 획득 함수 (Killer 적용됨)
 # =========================================================
 def get_best_location():
     print("🛰️ 위치 정보 탐색 시작...")
 
-    # 1단계: GPS (High Accuracy) 시도
-    try:
-        print("  [1단계] GPS 정밀 탐색 시도 (15초)...")
-        res = subprocess.run(
-            ["termux-location", "-p", "gps"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=15,
-        )
-        info = format_location_info(json.loads(res.stdout))
-        print("  ✅ GPS 위치 확보 성공.")
-        return f"위치 정보 (GPS):\n{info}"
-    except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
-        print("  ⚠️ GPS 탐색 실패 또는 시간 초과.")
+    # 1단계: GPS (High Accuracy) 우선 시도
+    print("  [1단계] GPS 정밀 탐색 시도 (15초)...")
+
+    # 위에서 만든 '안전한 실행 함수'를 사용합니다.
+    gps_output, success = run_command_with_timeout(["termux-location", "-p", "gps"], 15)
+
+    if success and gps_output:
+        try:
+            info = format_location_info(json.loads(gps_output))
+            print("  ✅ GPS 위치 확보 성공.")
+            return f"위치 정보 (GPS):\n{info}"
+        except json.JSONDecodeError:
+            pass  # JSON 파싱 에러나면 다음으로 넘어감
+
+    print("  ⚠️ GPS 탐색 실패 또는 시간 초과. (프로세스 Kill 완료)")
+    print("  🔄 네트워크로 전환합니다.")
 
     # 2단계: Network (Wi-Fi/Cell) 시도
-    try:
-        print("  [2단계] 네트워크 기반 탐색 시도 (15초)...")
-        res = subprocess.run(
-            ["termux-location", "-p", "network"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=15,
-        )
-        info = format_location_info(json.loads(res.stdout))
-        print("  ✅ 네트워크 위치 확보 성공.")
-        return f"위치 정보 (Network):\n{info}"
-    except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
-        print("  ❌ 모든 위치 탐색 실패.")
-        return "위치 정보 획득 실패 (GPS 및 네트워크 응답 없음)"
+    print("  [2단계] 네트워크 기반 탐색 시도 (15초)...")
+
+    net_output, success = run_command_with_timeout(
+        ["termux-location", "-p", "network"], 15
+    )
+
+    if success and net_output:
+        try:
+            info = format_location_info(json.loads(net_output))
+            print("  ✅ 네트워크 위치 확보 성공.")
+            return f"위치 정보 (Network):\n{info}"
+        except json.JSONDecodeError:
+            pass
+
+    print("  ❌ 모든 위치 탐색 실패.")
+    return "위치 정보 획득 실패 (GPS 및 네트워크 응답 없음)"
 
 
 # =========================================================
@@ -128,24 +176,23 @@ def take_selfie():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     taken_files = []
 
-    # 1. 위치 정보 가져오기 (GPS 15초 -> 실패시 Network 15초)
+    # 1. 위치 정보 가져오기 (GPS -> 15초 -> Kill -> Network -> 15초)
     location_info = get_best_location()
 
     # 2. 촬영 시퀀스 설정 (전면 1장, 후면 1장)
     shooting_sequence = [
-        {"name": "front", "id": 1},  # 전면
-        {"name": "back", "id": 0},  # 후면
+        {"name": "front", "id": 1},
+        {"name": "back", "id": 0},
     ]
 
-    print(f"\n📸 카메라 촬영 준비... (안정성을 위해 3초 대기)")
-    time.sleep(3)  # 🚨 초기 하드웨어 준비 시간 확보
+    print(f"\n📸 카메라 촬영 준비... (위치 찾느라 고생했으니 2초 쉼)")
+    time.sleep(2)
 
     for i, cam in enumerate(shooting_sequence):
         name = cam["name"]
         cam_id = cam["id"]
         filename = f"{target_dir}/{timestamp}_{name}.jpg"
 
-        # 🚨 카메라 전환 시 충분한 시간 확보 (4초)
         if i > 0:
             print("🕒 카메라 전환 및 저장 대기 (4초)...")
             time.sleep(4)
@@ -157,6 +204,8 @@ def take_selfie():
             subprocess.run(cmd, shell=True, check=True)
             print(f"  > 저장 완료: {os.path.basename(filename)}")
             taken_files.append(filename)
+            time.sleep(1)
+
         except subprocess.CalledProcessError:
             print(f"  ❌ {name} 촬영 실패 (권한 또는 하드웨어 오류)")
 
@@ -170,11 +219,12 @@ def take_selfie():
 
 
 if __name__ == "__main__":
-    # 필수 폴더 생성
+    acquire_wake_lock()
+    print("🔒 Wake Lock 설정됨")
+
     try:
         os.makedirs("/sdcard/DCIM/termux", exist_ok=True)
-    except OSError:
-        print("❌ 폴더 생성 권한 오류.")
-        exit(1)
-
-    take_selfie()
+        take_selfie()
+    finally:
+        release_wake_lock()
+        print("🔓 Wake Lock 해제 완료.")
