@@ -65,9 +65,13 @@ def format_location_info(loc_json):
 # =========================================================
 # 🛰️ 위치 정보 획득 함수 (Killer 적용됨, 시간 3초/5초)
 # =========================================================
+# =========================================================
+# 🛰️ 위치 정보 획득 함수 (3단계 전략: GPS -> Network -> Last)
+# =========================================================
 def get_best_location():
     print("🛰️ 위치 정보 탐색 시작...")
 
+    # 1단계: GPS (High Accuracy) 시도
     print("  [1단계] GPS 정밀 탐색 시도 (3초)...")
     gps_output, success = run_command_with_timeout(["termux-location", "-p", "gps"], 3)
 
@@ -79,8 +83,9 @@ def get_best_location():
         except json.JSONDecodeError:
             pass
 
-    print("  ⚠️ GPS 탐색 실패. (빠르게 네트워크로 전환)")
+    print("  ⚠️ GPS 탐색 실패. (네트워크로 전환)")
 
+    # 2단계: Network (Wi-Fi/Cell) 시도
     print("  [2단계] 네트워크 기반 탐색 시도 (5초)...")
     net_output, success = run_command_with_timeout(
         ["termux-location", "-p", "network"], 5
@@ -94,8 +99,25 @@ def get_best_location():
         except json.JSONDecodeError:
             pass
 
+    print("  ⚠️ 네트워크 탐색 실패. (마지막 위치 조회)")
+
+    # 3단계: 마지막 위치 (Last Known Location) - 필살기
+    print("  [3단계] 마지막 저장된 위치 가져오기...")
+    # -r last 옵션은 센서를 켜지 않고 저장된 값을 즉시 반환합니다.
+    last_output, success = run_command_with_timeout(
+        ["termux-location", "-r", "last"], 3
+    )
+
+    if success and last_output:
+        try:
+            info = format_location_info(json.loads(last_output))
+            print("  ✅ 마지막 위치 확보 성공.")
+            return f"위치 정보 (마지막 기록):\n{info}"
+        except json.JSONDecodeError:
+            pass
+
     print("  ❌ 모든 위치 탐색 실패.")
-    return "위치 정보 획득 실패 (GPS 및 네트워크 응답 없음)"
+    return "위치 정보 획득 실패 (권한 확인 필요)"
 
 
 # =========================================================
