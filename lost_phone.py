@@ -5,7 +5,7 @@ import os
 import configparser
 import json
 import shutil
-import glob
+import glob  # 🚨 파일 패턴 찾기를 위해 추가
 
 import smtplib
 from email.mime.text import MIMEText
@@ -33,14 +33,12 @@ def run_command_with_timeout(cmd_list, timeout_sec):
         proc = subprocess.Popen(
             cmd_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
-        # 🚨 수정: 60초 동안 프로세스를 기다립니다.
         stdout, stderr = proc.communicate(timeout=timeout_sec)
         if proc.returncode == 0:
             return stdout, True
         else:
             return None, False
     except subprocess.TimeoutExpired:
-        # 🚨 60초가 지나면 파이썬이 프로세스를 종료시킵니다.
         proc.kill()
         proc.communicate()
         return None, False
@@ -65,30 +63,39 @@ def format_location_info(loc_json):
 
 
 # =========================================================
-# 🛰️ 위치 정보 획득 함수 (안정적인 60초 대기)
+# 🛰️ 위치 정보 획득 함수 (Killer 적용됨, 시간 3초/5초)
 # =========================================================
 def get_best_location():
-    # 🚨 수정: 단일 요청으로 60초를 기다리도록 단순화
-    LONG_TIMEOUT_SEC = 60
-    print(f"🛰️ 위치 정보 탐색 시작 (최대 {LONG_TIMEOUT_SEC}초 대기)...")
+    print("🛰️ 위치 정보 탐색 시작...")
 
-    # 옵션 없이 termux-location을 호출하여 OS가 GPS와 네트워크 중 가장 좋은 결과를 찾도록 합니다.
-    location_output, success = run_command_with_timeout(
-        ["termux-location"], LONG_TIMEOUT_SEC
-    )
+    print("  [1단계] GPS 정밀 탐색 시도 (3초)...")
+    gps_output, success = run_command_with_timeout(["termux-location", "-p", "gps"], 3)
 
-    if success and location_output:
+    if success and gps_output:
         try:
-            info = format_location_info(json.loads(location_output))
-            print("  ✅ 위치 확보 성공.")
-            return f"위치 정보 (GPS 또는 네트워크):\n{info}"
+            info = format_location_info(json.loads(gps_output))
+            print("  ✅ GPS 위치 확보 성공.")
+            return f"위치 정보 (GPS):\n{info}"
         except json.JSONDecodeError:
             pass
 
-    print(
-        f"  ❌ 위치 탐색 실패. (최대 {LONG_TIMEOUT_SEC}초 동안 위치 정보를 얻지 못함)"
+    print("  ⚠️ GPS 탐색 실패. (빠르게 네트워크로 전환)")
+
+    print("  [2단계] 네트워크 기반 탐색 시도 (5초)...")
+    net_output, success = run_command_with_timeout(
+        ["termux-location", "-p", "network"], 5
     )
-    return "위치 정보 획득 실패 (응답 없음)"
+
+    if success and net_output:
+        try:
+            info = format_location_info(json.loads(net_output))
+            print("  ✅ 네트워크 위치 확보 성공.")
+            return f"위치 정보 (Network):\n{info}"
+        except json.JSONDecodeError:
+            pass
+
+    print("  ❌ 모든 위치 탐색 실패.")
+    return "위치 정보 획득 실패 (GPS 및 네트워크 응답 없음)"
 
 
 # =========================================================
@@ -153,7 +160,7 @@ def send_photo_email(filenames, subject_text, location_info):
 
 
 # =========================================================
-# 🔍 최신 녹음 파일 찾기 함수
+# 🔍 최신 녹음 파일 찾기 함수 (추가됨)
 # =========================================================
 def find_latest_recording(search_dir="/sdcard/"):
     # TermuxAudioRecording*.m4a 패턴으로 파일 검색
