@@ -102,9 +102,8 @@ def get_best_location():
 # =========================================================
 def send_photo_email(filenames, subject_text, location_info):
     config = configparser.ConfigParser()
-    # config.ini 파일 경로도 절대 경로로 찾거나 현재 경로 확인
+    # config.ini 경로 확인 (현재 폴더 또는 Termux 홈)
     if not os.path.exists("config.ini"):
-        # 혹시 모를 경로 문제를 위해 홈 디렉토리에서도 찾아봅니다.
         home_config = "/data/data/com.termux/files/home/config.ini"
         if os.path.exists(home_config):
             config.read(home_config)
@@ -164,28 +163,29 @@ def send_photo_email(filenames, subject_text, location_info):
 # 📷 메인 촬영 및 녹음 함수
 # =========================================================
 def take_selfie():
+    # 최종 저장 경로
     target_dir = "/sdcard/Documents/termux"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     taken_files = []
 
     # -----------------------------------------------
-    # 🎙️ 1. 오디오 녹음 시작 (절대 경로 사용)
+    # 🎙️ 1. 오디오 녹음 시작 (폰 루트 /sdcard/ 사용)
     # -----------------------------------------------
-    # 🚨 수정: Termux 홈 디렉터리의 절대 경로를 지정하여 파이썬이 파일을 못 찾는 문제 해결
-    termux_home = "/data/data/com.termux/files/home"
-    temp_audio = f"{termux_home}/temp_record.m4a"
+    # 🚨 수정: 폰의 최상위 경로(/sdcard/)를 임시 저장소로 명시합니다.
+    temp_audio = "/sdcard/temp_record.m4a"
     final_audio = f"{target_dir}/{timestamp}_audio.m4a"
 
     audio_proc = None
 
     print(f"🎙️ 30초 녹음 시작 (백그라운드)...")
-    print(f"   (임시 저장 경로: {temp_audio})")  # 디버깅용 출력
+    print(f"   (임시 저장 경로: {temp_audio})")
 
     try:
-        # 기존 파일이 있다면 삭제 (충돌 방지)
+        # 기존 임시 파일 삭제
         if os.path.exists(temp_audio):
             os.remove(temp_audio)
 
+        # 🚨 녹음 명령 실행
         audio_proc = subprocess.Popen(
             ["termux-microphone-record", "-d", "30", "-f", temp_audio],
             stdout=subprocess.PIPE,
@@ -238,12 +238,10 @@ def take_selfie():
         print("⏳ 녹음 완료 대기 중 (최대 30초)...")
         audio_proc.wait()
 
-        # 절대 경로로 파일 확인
+        # 🚨 폰 루트(/sdcard/)에 파일이 생겼는지 확인하고 이동
         if os.path.exists(temp_audio):
             try:
-                # shutil.move는 대상 경로에 파일이 있으면 에러가 날 수 있어 복사 후 삭제로 처리
-                shutil.copy2(temp_audio, final_audio)
-                os.remove(temp_audio)  # 임시 파일 삭제
+                shutil.move(temp_audio, final_audio)
                 print(f"✅ 녹음 파일 이동 완료: {os.path.basename(final_audio)}")
                 taken_files.append(final_audio)
             except Exception as e:
