@@ -226,30 +226,34 @@ def find_latest_recording(search_dir="/sdcard/"):
 # =========================================================
 # 📷 메인 촬영 및 녹음 함수 (수정됨)
 # =========================================================
+# =========================================================
+# 📷 메인 촬영 및 녹음 함수 (수정됨: 시간 지정 녹음)
+# =========================================================
 def take_selfie():
     target_dir = "/sdcard/Documents/termux"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     taken_files = []
 
+    # ⏱️ 녹음 시간 설정 (초)
     RECORD_SECONDS = 60
 
     # -----------------------------------------------
-    # 🎙️ 1. 오디오 녹음 시작 (수정: 파일명 지정 방식)
+    # 🎙️ 1. 오디오 녹음 시작 (가장 중요!)
     # -----------------------------------------------
     final_audio = f"{target_dir}/{timestamp}_audio.m4a"
+    print(f"🎙️ {RECORD_SECONDS}초 녹음 시작 (자동 종료 예약)...")
 
-    print(f"🎙️ {RECORD_SECONDS}초 녹음 시작 (파일 직접 저장)...")
     try:
-        # [-f 파일경로] 옵션을 추가하여 지정된 위치에 바로 저장합니다.
-        subprocess.Popen(
-            ["termux-microphone-record", "-f", final_audio],
+        # [-l 초] 옵션을 사용하여 정해진 시간만큼만 녹음하고 스스로 종료되게 합니다.
+        audio_proc = subprocess.Popen(
+            ["termux-microphone-record", "-f", final_audio, "-l", str(RECORD_SECONDS)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        record_start_time = time.time()
+        # 여기서 wait()를 하지 않고 백그라운드에서 돌게 둡니다.
     except Exception as e:
         print(f"❌ 녹음 시작 실패: {e}")
-        record_start_time = time.time()
+        audio_proc = None
 
     # -----------------------------------------------
     # 🛰️ 2. 위치 정보 가져오기
@@ -264,8 +268,8 @@ def take_selfie():
         {"name": "back", "id": 0},
     ]
 
-    print(f"\n📸 카메라 촬영 준비... (위치 찾느라 고생했으니 2초 쉼)")
-    time.sleep(2)
+    print(f"\n📸 카메라 촬영 준비...")
+    time.sleep(1)  # 안정성을 위한 짧은 대기
 
     for i, cam in enumerate(shooting_sequence):
         name = cam["name"]
@@ -273,8 +277,8 @@ def take_selfie():
         filename = f"{target_dir}/{timestamp}_{name}.jpg"
 
         if i > 0:
-            print("🕒 카메라 전환 및 저장 대기 (4초)...")
-            time.sleep(4)
+            print("🕒 카메라 전환 및 저장 대기 (2초)...")
+            time.sleep(2)
 
         cmd = f"termux-camera-photo -c {cam_id} {filename}"
 
@@ -282,46 +286,40 @@ def take_selfie():
             print(f"  > [{name.upper()}] 촬영 시도...")
             subprocess.run(cmd, shell=True, check=True)
 
-            # 파일이 실제로 생겼는지 확인
             if os.path.exists(filename):
                 print(f"  > 저장 완료: {os.path.basename(filename)}")
                 taken_files.append(filename)
             else:
                 print(f"  ⚠️ 파일 생성 안됨: {filename}")
-            time.sleep(1)
 
         except subprocess.CalledProcessError:
-            print(f"  ❌ {name} 촬영 실패 (권한 또는 하드웨어 오류)")
+            print(f"  ❌ {name} 촬영 실패")
 
     # -----------------------------------------------
-    # ⏳ 4. 남은 시간 대기 및 녹음 종료
+    # ⏳ 4. 녹음 완료 대기 (핵심 수정 사항)
     # -----------------------------------------------
-    elapsed_time = time.time() - record_start_time
-    remaining_time = RECORD_SECONDS - elapsed_time
-
-    if remaining_time > 0:
-        print(f"⏳ 남은 {remaining_time:.1f}초 대기 후 녹음 종료...")
-        time.sleep(remaining_time)
-    else:
-        print("⏳ 시간이 초과되어 즉시 종료합니다.")
-
-    # 녹음 종료 명령
-    subprocess.run(
-        ["termux-microphone-record", "-q"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    time.sleep(1.5)  # 파일 저장 마무리를 위해 잠시 대기
+    # 사진 촬영이 60초보다 빨리 끝나면, 녹음이 끝날 때까지 기다려야 파일이 완성됩니다.
+    if audio_proc:
+        print(f"\n⏳ 녹음 마무리 대기 중... (총 {RECORD_SECONDS}초 채우는 중)")
+        try:
+            # 설정한 시간이 다 될 때까지 파이썬 스크립트가 종료되지 않고 기다립니다.
+            audio_proc.wait(timeout=RECORD_SECONDS + 5)
+        except subprocess.TimeoutExpired:
+            print("⚠️ 녹음 강제 종료 (시간 초과)")
+            audio_proc.kill()
 
     # -----------------------------------------------
-    # 📂 녹음 파일 확인 (수정: 이동 로직 삭제)
+    # 📂 녹음 파일 확인
     # -----------------------------------------------
-    # 이미 final_audio 위치에 저장되었으므로 존재 여부만 확인하면 됩니다.
     if os.path.exists(final_audio):
-        print(f"✅ 녹음 파일 확인 완료: {os.path.basename(final_audio)}")
-        taken_files.append(final_audio)
+        file_size = os.path.getsize(final_audio)
+        if file_size > 0:
+            print(f"✅ 녹음 파일 생성 완료 ({file_size} bytes)")
+            taken_files.append(final_audio)
+        else:
+            print("❌ 녹음 파일 용량이 0입니다. (녹음 실패)")
     else:
-        print(f"❌ 녹음 파일이 생성되지 않았습니다: {final_audio}")
+        print(f"❌ 녹음 파일을 찾을 수 없습니다: {final_audio}")
 
     # -----------------------------------------------
     # 📧 5. 이메일 발송
