@@ -223,6 +223,9 @@ def find_latest_recording(search_dir="/sdcard/"):
 # =========================================================
 # 📷 메인 촬영 및 녹음 함수
 # =========================================================
+# =========================================================
+# 📷 메인 촬영 및 녹음 함수 (수정됨)
+# =========================================================
 def take_selfie():
     target_dir = "/sdcard/Documents/termux"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -231,22 +234,22 @@ def take_selfie():
     RECORD_SECONDS = 60
 
     # -----------------------------------------------
-    # 🎙️ 1. 오디오 녹음 시작
+    # 🎙️ 1. 오디오 녹음 시작 (수정: 파일명 지정 방식)
     # -----------------------------------------------
-    audio_proc = None
     final_audio = f"{target_dir}/{timestamp}_audio.m4a"
 
-    print(f"🎙️ {RECORD_SECONDS}초 녹음 시작 (수동 제어)...")
+    print(f"🎙️ {RECORD_SECONDS}초 녹음 시작 (파일 직접 저장)...")
     try:
-        audio_proc = subprocess.Popen(
-            ["termux-microphone-record"],
+        # [-f 파일경로] 옵션을 추가하여 지정된 위치에 바로 저장합니다.
+        subprocess.Popen(
+            ["termux-microphone-record", "-f", final_audio],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
         record_start_time = time.time()
     except Exception as e:
         print(f"❌ 녹음 시작 실패: {e}")
-        record_start_time = time.time()  # 에러나도 시간 계산을 위해 설정
+        record_start_time = time.time()
 
     # -----------------------------------------------
     # 🛰️ 2. 위치 정보 가져오기
@@ -278,8 +281,13 @@ def take_selfie():
         try:
             print(f"  > [{name.upper()}] 촬영 시도...")
             subprocess.run(cmd, shell=True, check=True)
-            print(f"  > 저장 완료: {os.path.basename(filename)}")
-            taken_files.append(filename)
+
+            # 파일이 실제로 생겼는지 확인
+            if os.path.exists(filename):
+                print(f"  > 저장 완료: {os.path.basename(filename)}")
+                taken_files.append(filename)
+            else:
+                print(f"  ⚠️ 파일 생성 안됨: {filename}")
             time.sleep(1)
 
         except subprocess.CalledProcessError:
@@ -297,38 +305,23 @@ def take_selfie():
     else:
         print("⏳ 시간이 초과되어 즉시 종료합니다.")
 
+    # 녹음 종료 명령
     subprocess.run(
         ["termux-microphone-record", "-q"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    time.sleep(1.5)
+    time.sleep(1.5)  # 파일 저장 마무리를 위해 잠시 대기
 
-    latest_rec = find_latest_recording("/sdcard/")
-
-    if latest_rec and os.path.exists(latest_rec):
-        try:
-            shutil.move(latest_rec, final_audio)
-            print(f"✅ 녹음 파일 발견 및 이동 완료: {os.path.basename(final_audio)}")
-            taken_files.append(final_audio)
-        except Exception as e:
-            print(f"❌ 녹음 파일 이동 실패: {e}")
+    # -----------------------------------------------
+    # 📂 녹음 파일 확인 (수정: 이동 로직 삭제)
+    # -----------------------------------------------
+    # 이미 final_audio 위치에 저장되었으므로 존재 여부만 확인하면 됩니다.
+    if os.path.exists(final_audio):
+        print(f"✅ 녹음 파일 확인 완료: {os.path.basename(final_audio)}")
+        taken_files.append(final_audio)
     else:
-        # Termux 홈 확인
-        termux_home = os.getenv("HOME", "/data/data/com.termux/files/home")
-        latest_rec_home = find_latest_recording(termux_home)
-
-        if latest_rec_home and os.path.exists(latest_rec_home):
-            try:
-                shutil.move(latest_rec_home, final_audio)
-                print(
-                    f"✅ 녹음 파일(홈) 발견 및 이동 완료: {os.path.basename(final_audio)}"
-                )
-                taken_files.append(final_audio)
-            except Exception as e:
-                print(f"❌ 녹음 파일 이동 실패: {e}")
-        else:
-            print("❌ 녹음 파일을 찾을 수 없습니다.")
+        print(f"❌ 녹음 파일이 생성되지 않았습니다: {final_audio}")
 
     # -----------------------------------------------
     # 📧 5. 이메일 발송
