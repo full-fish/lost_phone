@@ -5,7 +5,7 @@ import os
 import configparser
 import json
 import shutil
-import glob  # 🚨 파일 패턴 찾기를 위해 추가
+import glob
 
 import smtplib
 from email.mime.text import MIMEText
@@ -63,7 +63,7 @@ def format_location_info(loc_json):
 
 
 # =========================================================
-# 🛰️ 위치 정보 획득 함수 (안정적인 3단계)
+# 🛰️ 위치 정보 획득 함수
 # =========================================================
 def get_best_location():
     print("🛰️ 위치 정보 탐색 시작...")
@@ -96,7 +96,6 @@ def get_best_location():
 
     print("  ⚠️ 네트워크 탐색 실패. (마지막 위치 조회)")
 
-    # 3단계: 마지막 위치 (Last Known Location)
     print("  [3단계] 마지막 저장된 위치 가져오기...")
     last_output, success = run_command_with_timeout(
         ["termux-location", "-r", "last"], 3
@@ -115,68 +114,100 @@ def get_best_location():
 
 
 # =========================================================
-# 📧 이메일 전송 함수
+# 📧 이메일 전송 함수 (결함 허용 로직 강화)
 # =========================================================
 def send_photo_email(filenames, subject_text, location_info):
     config = configparser.ConfigParser()
-    if not os.path.exists("config.ini"):
+    config_path = "config.ini"
+
+    # config.ini 경로 확인
+    if not os.path.exists(config_path):
         home_config = "/data/data/com.termux/files/home/config.ini"
         if os.path.exists(home_config):
-            config.read(home_config)
+            config_path = home_config
         else:
             print("❌ 오류: config.ini 파일을 찾을 수 없습니다.")
             return False
-    else:
-        config.read("config.ini")
 
-    try:
-        settings = config["EMAIL_CONFIG"]
-        SMTP_SERVER = settings.get("smtp_server")
-        SMTP_PORT = settings.getint("smtp_port")
-        SENDER_EMAIL = settings.get("sender_email")
-        APP_PASSWORD = settings.get("app_password")
-        RECIPIENT_EMAIL = settings.get("recipient_email")
+    config.read(config_path)
 
-        msg = MIMEMultipart()
-        msg["From"] = SENDER_EMAIL
-        msg["To"] = RECIPIENT_EMAIL
-        msg["Subject"] = subject_text
-
-        photo_count = len([f for f in filenames if f.endswith(".jpg")])
-        body = (
-            f"침입자 감지 알림입니다.\n"
-            f"- 사진: {photo_count}장\n"
-            f"- 녹음: 포함됨 (60초)\n\n"
-            f"--- 위치 정보 ---\n{location_info}\n-----------------"
-        )
-        msg.attach(MIMEText(body, "plain"))
-
-        for filename in filenames:
-            if os.path.exists(filename):
-                with open(filename, "rb") as f:
-                    part = MIMEBase("application", "octet-stream")
-                    part.set_payload(f.read())
-                encoders.encode_base64(part)
-                part.add_header(
-                    "Content-Disposition",
-                    f"attachment; filename= {os.path.basename(filename)}",
-                )
-                msg.attach(part)
-
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.starttls()
-        server.login(SENDER_EMAIL, APP_PASSWORD)
-        server.sendmail(SENDER_EMAIL, RECIPIENT_EMAIL, msg.as_string())
-        server.quit()
-        print(f"✅ 이메일 전송 완료 ({RECIPIENT_EMAIL})")
-        return True
-    except Exception as e:
-        print(f"❌ 이메일 전송 오류: {e}")
+    if not config.sections():
+        print("❌ 오류: 설정 파일에 계정 정보가 없습니다.")
         return False
+
+    success_count = 0
+
+    # 🚨 모든 섹션(계정)을 순회
+    for section in config.sections():
+        print(f"\n📨 [{section}] 계정 처리 중...")
+
+        try:
+            settings = config[section]
+
+            # 값 읽기 (없으면 None 반환)
+            SMTP_SERVER = settings.get("smtp_server")
+            SMTP_PORT = settings.getint("smtp_port")
+            SENDER_EMAIL = settings.get("sender_email")
+            APP_PASSWORD = settings.get("app_password")
+            RECIPIENT_EMAIL = settings.get("recipient_email")
+
+            # 🚨 [검증 단계] 필수 정보가 하나라도 비어있으면 이 계정은 건너뜀
+            if not all(
+                [SMTP_SERVER, SMTP_PORT, SENDER_EMAIL, APP_PASSWORD, RECIPIENT_EMAIL]
+            ):
+                print(f"  ⚠️ 경고: [{section}] 설정 정보가 부족합니다. 건너뜁니다.")
+                continue  # 다음 섹션으로 즉시 이동
+
+            # 메일 구성
+            msg = MIMEMultipart()
+            msg["From"] = SENDER_EMAIL
+            msg["To"] = RECIPIENT_EMAIL
+            msg["Subject"] = subject_text
+
+            photo_count = len([f for f in filenames if f.endswith(".jpg")])
+            body = (
+                f"침입자 감지 알림입니다.\n"
+                f"- 발송 계정: {section}\n"
+                f"- 사진: {photo_count}장\n"
+                f"- 녹음: 포함됨 (60초)\n\n"
+                f"--- 위치 정보 ---\n{location_info}\n-----------------"
+            )
+            msg.attach(MIMEText(body, "plain"))
+
+            # 파일 첨부
+            for filename in filenames:
+                if os.path.exists(filename):
+                    with open(filename, "rb") as f:
+                        part = MIMEBase("application", "octet-stream")
+                        part.set_payload(f.read())
+                    encoders.encode_base64(part)
+                    part.add_header(
+                        "Content-Disposition",
+                        f"attachment; filename= {os.path.basename(filename)}",
+                    )
+                    msg.attach(part)
+
+            # 서버 연결 및 전송
+            print(f"  Connecting to {SMTP_SERVER}...")
+            server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+            server.starttls()
+            server.login(SENDER_EMAIL, APP_PASSWORD)
+            server.sendmail(SENDER_EMAIL, RECIPIENT_EMAIL, msg.as_string())
+            server.quit()
+
+            print(f"  ✅ {section}: 전송 성공! -> {RECIPIENT_EMAIL}")
+            success_count += 1
+
+        except Exception as e:
+            # 🚨 이 계정에서 에러가 나도 스크립트는 죽지 않고 로그만 남김
+            print(f"  ❌ {section}: 전송 실패 ({e})")
+            # continue는 자동으로 수행됨 (다음 루프로)
+
+    return success_count > 0
 
 
 # =========================================================
-# 🔍 최신 녹음 파일 찾기 함수 (추가됨)
+# 🔍 최신 녹음 파일 찾기 함수
 # =========================================================
 def find_latest_recording(search_dir="/sdcard/"):
     pattern = os.path.join(search_dir, "TermuxAudioRecording*.m4a")
@@ -190,31 +221,32 @@ def find_latest_recording(search_dir="/sdcard/"):
 
 
 # =========================================================
-# 📷 메인 촬영 및 녹음 함수 (최종 수동 타이머)
+# 📷 메인 촬영 및 녹음 함수
 # =========================================================
 def take_selfie():
     target_dir = "/sdcard/Documents/termux"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     taken_files = []
 
-    RECORD_SECONDS = 60  # 🚨 녹음 시간 설정 (초)
+    RECORD_SECONDS = 60
 
     # -----------------------------------------------
-    # 🎙️ 1. 오디오 녹음 시작 (수동 제어)
+    # 🎙️ 1. 오디오 녹음 시작
     # -----------------------------------------------
+    audio_proc = None
     final_audio = f"{target_dir}/{timestamp}_audio.m4a"
-    record_start_time = time.time()  # 🚨 시작 시간 기록
 
     print(f"🎙️ {RECORD_SECONDS}초 녹음 시작 (수동 제어)...")
     try:
-        # Popen으로 무한 녹음을 시작합니다. (Process itself does not block Python)
-        subprocess.Popen(
+        audio_proc = subprocess.Popen(
             ["termux-microphone-record"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+        record_start_time = time.time()
     except Exception as e:
         print(f"❌ 녹음 시작 실패: {e}")
+        record_start_time = time.time()  # 에러나도 시간 계산을 위해 설정
 
     # -----------------------------------------------
     # 🛰️ 2. 위치 정보 가져오기
@@ -254,7 +286,7 @@ def take_selfie():
             print(f"  ❌ {name} 촬영 실패 (권한 또는 하드웨어 오류)")
 
     # -----------------------------------------------
-    # ⏳ 4. 남은 시간 대기 및 녹음 종료 (핵심)
+    # ⏳ 4. 남은 시간 대기 및 녹음 종료
     # -----------------------------------------------
     elapsed_time = time.time() - record_start_time
     remaining_time = RECORD_SECONDS - elapsed_time
@@ -263,19 +295,15 @@ def take_selfie():
         print(f"⏳ 남은 {remaining_time:.1f}초 대기 후 녹음 종료...")
         time.sleep(remaining_time)
     else:
-        print("⏳ 주요 작업 시간이 60초를 초과했습니다. 즉시 종료합니다.")
+        print("⏳ 시간이 초과되어 즉시 종료합니다.")
 
-    # 🚨 녹음 강제 종료 명령 전송 (-q 옵션)
     subprocess.run(
         ["termux-microphone-record", "-q"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    time.sleep(1.5)  # 파일이 완전히 닫힐 시간 부여
+    time.sleep(1.5)
 
-    # -----------------------------------------------
-    # 📂 5. 파일 찾기 및 이동
-    # -----------------------------------------------
     latest_rec = find_latest_recording("/sdcard/")
 
     if latest_rec and os.path.exists(latest_rec):
@@ -286,6 +314,7 @@ def take_selfie():
         except Exception as e:
             print(f"❌ 녹음 파일 이동 실패: {e}")
     else:
+        # Termux 홈 확인
         termux_home = os.getenv("HOME", "/data/data/com.termux/files/home")
         latest_rec_home = find_latest_recording(termux_home)
 
@@ -299,10 +328,10 @@ def take_selfie():
             except Exception as e:
                 print(f"❌ 녹음 파일 이동 실패: {e}")
         else:
-            print("❌ 녹음 파일을 찾을 수 없습니다. (저장 실패)")
+            print("❌ 녹음 파일을 찾을 수 없습니다.")
 
     # -----------------------------------------------
-    # 📧 6. 이메일 발송
+    # 📧 5. 이메일 발송
     # -----------------------------------------------
     if taken_files:
         print("\n📧 이메일 전송 준비...")
