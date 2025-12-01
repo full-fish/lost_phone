@@ -15,7 +15,7 @@ from email import encoders
 
 
 # =========================================================
-# 🔋 전원 관리 함수 (Wake Lock)
+# 전원 관리 함수 (Wake Lock)
 # =========================================================
 def acquire_wake_lock():
     subprocess.run(["termux-wake-lock"])
@@ -26,7 +26,7 @@ def release_wake_lock():
 
 
 # =========================================================
-# 🛠️ 안전한 명령어 실행 함수 (Killer 기능 포함)
+# 안전한 명령어 실행 함수 (Killer 기능 포함)
 # =========================================================
 def run_command_with_timeout(cmd_list, timeout_sec):
     try:
@@ -47,7 +47,7 @@ def run_command_with_timeout(cmd_list, timeout_sec):
 
 
 # =========================================================
-# 🛠️ 유틸리티: JSON 위치 정보 포맷팅
+# 유틸리티: JSON 위치 정보 포맷팅
 # =========================================================
 def format_location_info(loc_json):
     lat = loc_json.get("latitude", "N/A")
@@ -63,12 +63,12 @@ def format_location_info(loc_json):
 
 
 # =========================================================
-# 🛰️ 위치 정보 획득 함수
+# 위치 정보 획득 함수
 # =========================================================
 def get_best_location():
-    print("🛰️ 위치 정보 탐색 시작...")
+    print("위치 정보 탐색 시작...")
 
-    print("  [1단계] GPS 정밀 탐색 시도 (3초)...")
+    print("[1단계] GPS 정밀 탐색 시도 (3초)...")
     gps_output, success = run_command_with_timeout(["termux-location", "-p", "gps"], 3)
 
     if success and gps_output:
@@ -79,9 +79,9 @@ def get_best_location():
         except json.JSONDecodeError:
             pass
 
-    print("  ⚠️ GPS 탐색 실패. (네트워크로 전환)")
+    print("GPS 탐색 실패. (네트워크로 전환)")
 
-    print("  [2단계] 네트워크 기반 탐색 시도 (5초)...")
+    print("[2단계] 네트워크 기반 탐색 시도 (5초)...")
     net_output, success = run_command_with_timeout(
         ["termux-location", "-p", "network"], 5
     )
@@ -89,14 +89,14 @@ def get_best_location():
     if success and net_output:
         try:
             info = format_location_info(json.loads(net_output))
-            print("  ✅ 네트워크 위치 확보 성공.")
+            print("네트워크 위치 확보 성공.")
             return f"위치 정보 (Network):\n{info}"
         except json.JSONDecodeError:
             pass
 
-    print("  ⚠️ 네트워크 탐색 실패. (마지막 위치 조회)")
+    print("네트워크 탐색 실패. (마지막 위치 조회)")
 
-    print("  [3단계] 마지막 저장된 위치 가져오기...")
+    print("[3단계] 마지막 저장된 위치 가져오기...")
     last_output, success = run_command_with_timeout(
         ["termux-location", "-r", "last"], 3
     )
@@ -104,17 +104,17 @@ def get_best_location():
     if success and last_output:
         try:
             info = format_location_info(json.loads(last_output))
-            print("  ✅ 마지막 위치 확보 성공.")
+            print("마지막 위치 확보 성공.")
             return f"위치 정보 (마지막 기록):\n{info}"
         except json.JSONDecodeError:
             pass
 
-    print("  ❌ 모든 위치 탐색 실패.")
+    print("모든 위치 탐색 실패.")
     return "위치 정보 획득 실패 (권한 확인 필요)"
 
 
 # =========================================================
-# 📧 이메일 전송 함수 (결함 허용 로직 강화)
+# 이메일 전송 함수 (결함 허용 로직 강화)
 # =========================================================
 def send_photo_email(filenames, subject_text, location_info):
     config = configparser.ConfigParser()
@@ -126,20 +126,20 @@ def send_photo_email(filenames, subject_text, location_info):
         if os.path.exists(home_config):
             config_path = home_config
         else:
-            print("❌ 오류: config.ini 파일을 찾을 수 없습니다.")
+            print("오류: config.ini 파일을 찾을 수 없습니다.")
             return False
 
     config.read(config_path)
 
     if not config.sections():
-        print("❌ 오류: 설정 파일에 계정 정보가 없습니다.")
+        print("오류: 설정 파일에 계정 정보가 없습니다.")
         return False
 
     success_count = 0
 
-    # 🚨 모든 섹션(계정)을 순회
+    # 모든 섹션(계정)을 순회
     for section in config.sections():
-        print(f"\n📨 [{section}] 계정 처리 중...")
+        print(f"\n[{section}] 계정 처리 중...")
 
         try:
             settings = config[section]
@@ -151,11 +151,11 @@ def send_photo_email(filenames, subject_text, location_info):
             APP_PASSWORD = settings.get("app_password")
             RECIPIENT_EMAIL = settings.get("recipient_email")
 
-            # 🚨 [검증 단계] 필수 정보가 하나라도 비어있으면 이 계정은 건너뜀
+            # [검증 단계] 필수 정보가 하나라도 비어있으면 이 계정은 건너뜀
             if not all(
                 [SMTP_SERVER, SMTP_PORT, SENDER_EMAIL, APP_PASSWORD, RECIPIENT_EMAIL]
             ):
-                print(f"  ⚠️ 경고: [{section}] 설정 정보가 부족합니다. 건너뜁니다.")
+                print(f"경고: [{section}] 설정 정보가 부족합니다. 건너뜁니다.")
                 continue  # 다음 섹션으로 즉시 이동
 
             # 메일 구성
@@ -188,7 +188,7 @@ def send_photo_email(filenames, subject_text, location_info):
                     msg.attach(part)
 
             # 서버 연결 및 전송
-            print(f"  Connecting to {SMTP_SERVER}...")
+            print(f"Connecting to {SMTP_SERVER}...")
             server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
             server.starttls()
             server.login(SENDER_EMAIL, APP_PASSWORD)
@@ -199,15 +199,15 @@ def send_photo_email(filenames, subject_text, location_info):
             success_count += 1
 
         except Exception as e:
-            # 🚨 이 계정에서 에러가 나도 스크립트는 죽지 않고 로그만 남김
-            print(f"  ❌ {section}: 전송 실패 ({e})")
+            # 이 계정에서 에러가 나도 스크립트는 죽지 않고 로그만 남김
+            print(f"{section}: 전송 실패 ({e})")
             # continue는 자동으로 수행됨 (다음 루프로)
 
     return success_count > 0
 
 
 # =========================================================
-# 🔍 최신 녹음 파일 찾기 함수
+# 최신 녹음 파일 찾기 함수
 # =========================================================
 def find_latest_recording(search_dir="/sdcard/"):
     pattern = os.path.join(search_dir, "TermuxAudioRecording*.m4a")
@@ -223,31 +223,22 @@ def find_latest_recording(search_dir="/sdcard/"):
 # =========================================================
 # 📷 메인 촬영 및 녹음 함수
 # =========================================================
-# =========================================================
-# 📷 메인 촬영 및 녹음 함수 (수정됨)
-# =========================================================
-# =========================================================
-# 📷 메인 촬영 및 녹음 함수 (수정됨: 시간 지정 녹음)
-# =========================================================
-# =========================================================
-# 📷 메인 촬영 및 녹음 함수 (수정됨: 충돌 방지 순차 실행)
-# =========================================================
 def take_selfie():
     target_dir = "/sdcard/Documents/termux"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     taken_files = []
 
-    # ⏱️ 녹음 시간 설정 (초)
+    # 녹음 시간 설정 (초)
     RECORD_SECONDS = 60
 
     # -----------------------------------------------
-    # 🛰️ 1. 위치 정보 가져오기
+    # 1. 위치 정보 가져오기
     # -----------------------------------------------
     # 위치를 가장 먼저 잡습니다.
     location_info = get_best_location()
 
     # -----------------------------------------------
-    # 📷 2. 카메라 촬영 (녹음보다 먼저!)
+    # 2. 카메라 촬영 (녹음보다 먼저!)
     # -----------------------------------------------
     # 중요: 녹음 중에 카메라를 켜면 녹음이 끊기는 폰이 많습니다.
     # 그래서 사진을 먼저 찍어서 파일로 만들어 둡니다.
@@ -256,7 +247,7 @@ def take_selfie():
         {"name": "back", "id": 0},
     ]
 
-    print(f"\n📸 카메라 촬영 시작... (충돌 방지를 위해 사진 먼저)")
+    print(f"\n카메라 촬영 시작... (충돌 방지를 위해 사진 먼저)")
 
     for i, cam in enumerate(shooting_sequence):
         name = cam["name"]
@@ -270,24 +261,24 @@ def take_selfie():
         cmd = f"termux-camera-photo -c {cam_id} {filename}"
 
         try:
-            print(f"  > [{name.upper()}] 촬영 시도...")
+            print(f"> [{name.upper()}] 촬영 시도...")
             subprocess.run(cmd, shell=True, check=True)
 
             # 파일 생성 확인
             if os.path.exists(filename):
-                print(f"  > 저장 완료: {os.path.basename(filename)}")
+                print(f"> 저장 완료: {os.path.basename(filename)}")
                 taken_files.append(filename)
             else:
-                print(f"  ⚠️ 파일 생성 실패: {filename}")
+                print(f"파일 생성 실패: {filename}")
 
         except subprocess.CalledProcessError:
-            print(f"  ❌ {name} 촬영 실패 (카메라 오류)")
+            print(f"{name} 촬영 실패 (카메라 오류)")
 
     # -----------------------------------------------
-    # 🎙️ 3. 오디오 녹음 시작 (사진 다 찍고 나서)
+    # 3. 오디오 녹음 시작 (사진 다 찍고 나서)
     # -----------------------------------------------
     final_audio = f"{target_dir}/{timestamp}_audio.m4a"
-    print(f"\n🎙️ {RECORD_SECONDS}초 녹음 시작 (사진 촬영 완료 후 진입)...")
+    print(f"\n{RECORD_SECONDS}초 녹음 시작 (사진 촬영 완료 후 진입)...")
 
     try:
         # [-l 초] 옵션: 지정된 시간만큼 녹음
@@ -298,7 +289,7 @@ def take_selfie():
             stderr=subprocess.PIPE,
         )
 
-        # 🛑 핵심 수정 사항: 파이썬 강제 대기 (Sleep)
+        # 핵심 수정 사항: 파이썬 강제 대기 (Sleep)
         # 명령어가 백그라운드에서 돌더라도, 파이썬이 먼저 메일을 보내지 못하게 잡습니다.
         # 녹음 시간(60초) + 여유 시간(5초) = 65초 대기
         print(f"⏳ 녹음이 진행되는 동안 {RECORD_SECONDS}초간 대기합니다...")
@@ -309,10 +300,10 @@ def take_selfie():
             proc.terminate()
 
     except Exception as e:
-        print(f"❌ 녹음 실행 오류: {e}")
+        print(f"녹음 실행 오류: {e}")
 
     # -----------------------------------------------
-    # 📂 녹음 파일 최종 확인
+    # 녹음 파일 최종 확인
     # -----------------------------------------------
     if os.path.exists(final_audio):
         file_size = os.path.getsize(final_audio)
@@ -321,28 +312,30 @@ def take_selfie():
             print(f"✅ 녹음 파일 생성 완료 ({file_size} bytes)")
             taken_files.append(final_audio)
         else:
-            print(f"❌ 녹음 파일이 너무 작습니다 (녹음 실패 의심): {file_size} bytes")
+            print(f"녹음 파일이 너무 작습니다 (녹음 실패 의심): {file_size} bytes")
     else:
-        print(f"❌ 녹음 파일을 찾을 수 없습니다: {final_audio}")
+        print(f"녹음 파일을 찾을 수 없습니다: {final_audio}")
 
     # -----------------------------------------------
-    # 📧 4. 이메일 발송
+    # 4. 이메일 발송
     # -----------------------------------------------
     if taken_files:
-        print("\n📧 이메일 전송 준비...")
-        subject = f"🚨 Lost Phone 감지 (사진+녹음) ({datetime.now().strftime('%Y-%m-%d %H:%M')})"
+        print("\n이메일 전송 준비...")
+        subject = (
+            f"Lost Phone 감지 (사진+녹음) ({datetime.now().strftime('%Y-%m-%d %H:%M')})"
+        )
         send_photo_email(taken_files, subject, location_info)
     else:
-        print("\n❌ 전송할 파일이 없습니다.")
+        print("\n전송할 파일이 없습니다.")
 
 
 if __name__ == "__main__":
     acquire_wake_lock()
-    print("🔒 Wake Lock 설정됨")
+    print("Wake Lock 설정됨")
 
     try:
         os.makedirs("/sdcard/Documents/termux", exist_ok=True)
         take_selfie()
     finally:
         release_wake_lock()
-        print("🔓 Wake Lock 해제 완료.")
+        print("Wake Lock 해제 완료.")
