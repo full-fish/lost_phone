@@ -4,7 +4,6 @@ from datetime import datetime
 import os
 import configparser
 import json
-import shutil
 import glob
 
 import smtplib
@@ -74,7 +73,7 @@ def get_best_location():
     if success and gps_output:
         try:
             info = format_location_info(json.loads(gps_output))
-            print("  ✅ GPS 위치 확보 성공.")
+            print("GPS 위치 확보 성공.")
             return f"위치 정보 (GPS):\n{info}"
         except json.JSONDecodeError:
             pass
@@ -195,7 +194,7 @@ def send_photo_email(filenames, subject_text, location_info):
             server.sendmail(SENDER_EMAIL, RECIPIENT_EMAIL, msg.as_string())
             server.quit()
 
-            print(f"  ✅ {section}: 전송 성공! -> {RECIPIENT_EMAIL}")
+            print(f"{section}: 전송 성공! -> {RECIPIENT_EMAIL}")
             success_count += 1
 
         except Exception as e:
@@ -221,7 +220,7 @@ def find_latest_recording(search_dir="/sdcard/"):
 
 
 # =========================================================
-# 📷 메인 촬영 및 녹음 함수
+# 메인 촬영 및 녹음 함수
 # =========================================================
 def take_selfie():
     target_dir = "/sdcard/Documents/termux"
@@ -289,10 +288,9 @@ def take_selfie():
             stderr=subprocess.PIPE,
         )
 
-        # 핵심 수정 사항: 파이썬 강제 대기 (Sleep)
         # 명령어가 백그라운드에서 돌더라도, 파이썬이 먼저 메일을 보내지 못하게 잡습니다.
         # 녹음 시간(60초) + 여유 시간(5초) = 65초 대기
-        print(f"⏳ 녹음이 진행되는 동안 {RECORD_SECONDS}초간 대기합니다...")
+        print(f"녹음이 진행되는 동안 {RECORD_SECONDS}초간 대기합니다...")
         time.sleep(RECORD_SECONDS + 5)
 
         # 혹시 프로세스가 안 죽었으면 확실히 종료
@@ -309,7 +307,7 @@ def take_selfie():
         file_size = os.path.getsize(final_audio)
         # 용량이 1KB(1024바이트) 이상이어야 유효한 녹음으로 간주
         if file_size > 1024:
-            print(f"✅ 녹음 파일 생성 완료 ({file_size} bytes)")
+            print(f"녹음 파일 생성 완료 ({file_size} bytes)")
             taken_files.append(final_audio)
         else:
             print(f"녹음 파일이 너무 작습니다 (녹음 실패 의심): {file_size} bytes")
